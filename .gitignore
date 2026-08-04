@@ -24,3 +24,6 @@ htmlcov/
 .claude/settings.local.json
 
 cassettes/
+
+# Personal build notes -- local only, never pushed
+devlog/
