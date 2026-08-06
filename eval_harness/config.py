@@ -14,6 +14,12 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://localhost:5432/rag_eval"
     baseline_drop_threshold: float = 0.05
 
+    # RAGAS metrics need their own LLM/embeddings (separate from the GPT-4o judge in Phase 6).
+    # Defaults to the cheaper model for day-to-day dev runs; override to "gpt-4o" for an
+    # "official" run before recording results.
+    ragas_llm_model: str = "gpt-4o-mini"
+    ragas_embedding_model: str = "text-embedding-3-small"
+
 
 @lru_cache
 def get_settings() -> Settings:
