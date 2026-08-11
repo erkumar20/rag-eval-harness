@@ -13,6 +13,12 @@ from eval_harness.config import get_settings
 from eval_harness.metrics.base import Metric
 from eval_harness.schemas import EvalInput, MetricResult
 
+# ragas' llm_factory defaults to max_tokens=1024, which truncates structured verdict output
+# (one entry per atomic statement, each with a reason string) on longer answers/contexts --
+# hit a real IncompleteOutputException at q011 of the golden set with the default. 4096 gives
+# enough headroom for the longest realistic answer in this corpus.
+_RAGAS_LLM_MAX_TOKENS = 4096
+
 _openai_client: AsyncOpenAI | None = None
 
 
@@ -40,7 +46,11 @@ class FaithfulnessMetric(Metric):
 
     def __init__(self, model: str | None = None):
         settings = get_settings()
-        llm = llm_factory(model or settings.ragas_llm_model, client=_get_openai_client())
+        llm = llm_factory(
+            model or settings.ragas_llm_model,
+            client=_get_openai_client(),
+            max_tokens=_RAGAS_LLM_MAX_TOKENS,
+        )
         self._metric = _RagasFaithfulness(llm=llm)
 
     def score(self, eval_input: EvalInput) -> MetricResult:
@@ -63,7 +73,11 @@ class ContextRecallMetric(Metric):
 
     def __init__(self, model: str | None = None):
         settings = get_settings()
-        llm = llm_factory(model or settings.ragas_llm_model, client=_get_openai_client())
+        llm = llm_factory(
+            model or settings.ragas_llm_model,
+            client=_get_openai_client(),
+            max_tokens=_RAGAS_LLM_MAX_TOKENS,
+        )
         self._metric = _RagasContextRecall(llm=llm)
 
     def score(self, eval_input: EvalInput) -> MetricResult:
@@ -89,7 +103,9 @@ class AnswerRelevanceMetric(Metric):
     def __init__(self, model: str | None = None, embedding_model: str | None = None):
         settings = get_settings()
         client = _get_openai_client()
-        llm = llm_factory(model or settings.ragas_llm_model, client=client)
+        llm = llm_factory(
+            model or settings.ragas_llm_model, client=client, max_tokens=_RAGAS_LLM_MAX_TOKENS
+        )
         embeddings = embedding_factory(
             "openai", model=embedding_model or settings.ragas_embedding_model, client=client
         )
