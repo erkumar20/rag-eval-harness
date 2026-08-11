@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     ragas_llm_model: str = "gpt-4o-mini"
     ragas_embedding_model: str = "text-embedding-3-small"
 
+    # LLM-as-judge (Phase 6): the actual GPT-4o, not the cheaper ragas_llm_model -- this is
+    # the component the resume claim is about. Only invoked on scores below this threshold
+    # (wired in Phase 9's runner), which is what keeps the cost of using the full model down.
+    judge_model: str = "gpt-4o"
+    judge_score_threshold: float = 0.7
+
 
 @lru_cache
 def get_settings() -> Settings:
