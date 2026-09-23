@@ -144,9 +144,12 @@ def run(
     # A run takes 15+ minutes against real APIs; without this the process is silent for all
     # of it, so there's no way to tell a slow run from a stuck one (which cost two cancelled
     # CI runs to learn).
+    # Root stays at WARNING so httpx/huggingface/sentence-transformers don't bury the
+    # progress lines in per-request chatter; only this package logs at INFO.
     logging.basicConfig(
-        level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%H:%M:%S", force=True
+        level=logging.WARNING, format="[%(asctime)s] %(message)s", datefmt="%H:%M:%S", force=True
     )
+    logging.getLogger("eval_harness").setLevel(logging.INFO)
 
     dataset_path = dataset or DEFAULT_DATASET_PATH
     qa_pairs = load_golden_dataset(dataset_path)
