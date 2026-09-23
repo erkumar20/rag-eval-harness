@@ -81,12 +81,19 @@ jobs:
       - name: Ingest corpus into Qdrant
         run: python -m rag_demo.ingest
 
+      # --no-use-judge: the gate's verdict is computed purely from metric scores, so the
+      # judge contributes nothing to pass/fail here -- it only writes prose. Leaving it on
+      # made CI dramatically slower on exactly the runs that matter, because a failing run
+      # pushes more metrics under the judge threshold and therefore fires *more* GPT-4o
+      # calls the worse the regression is. Two validation runs were cancelled at the timeout
+      # before this was cut. Judge diagnostics stay available for local/manual runs.
       - name: Run evaluation and gate against baseline
         id: gate
         run: |
           evalharness run \
             --pipeline demo \
             --pipeline-version "${{ github.sha }}" \
+            --no-use-judge \
             --gate \
             --baseline-file baseline.json \
             --summary-file gate-summary.md

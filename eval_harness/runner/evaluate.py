@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
@@ -12,6 +14,8 @@ from eval_harness.metrics.base import Metric
 from eval_harness.schemas import EvalInput, EvalResult, MetricResult
 from eval_harness.storage.db import session_scope
 from eval_harness.storage.repository import save_run
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -36,7 +40,10 @@ def _score_question(
     pipeline_version: str,
     dataset_version: str | None,
 ) -> EvalResult:
+    started = time.monotonic()
     output = pipeline.query(qa.question)
+    query_seconds = time.monotonic() - started
+
     eval_input = EvalInput(
         question=qa.question,
         answer=output["answer"],
@@ -47,6 +54,7 @@ def _score_question(
 
     metric_results: list[MetricResult] = []
     diagnoses: list[Diagnosis] = []
+    judge_seconds = 0.0
     for metric in metrics:
         try:
             result = metric.score(eval_input)
@@ -58,6 +66,7 @@ def _score_question(
         metric_results.append(result)
 
         if judge is not None and result.score < judge_threshold:
+            judge_started = time.monotonic()
             diagnoses.append(
                 judge.judge(
                     question=qa.question,
@@ -67,6 +76,22 @@ def _score_question(
                     score=result.score,
                 )
             )
+            judge_seconds += time.monotonic() - judge_started
+
+    # Logged per question because a run is otherwise completely silent for 15+ minutes,
+    # which makes a slow or stuck run impossible to diagnose without cancelling it. The
+    # query/judge split matters: it's what distinguishes "the pipeline got slow" from
+    # "low scores triggered a pile of judge calls".
+    scores = " ".join(f"{r.metric_name}={r.score:.2f}" for r in metric_results)
+    logger.info(
+        "%s done in %.1fs (query %.1fs, judge %.1fs over %d call(s)) %s",
+        qa.id,
+        time.monotonic() - started,
+        query_seconds,
+        judge_seconds,
+        len(diagnoses),
+        scores,
+    )
 
     return EvalResult(
         qa_id=qa.id,
@@ -116,6 +141,15 @@ def run_evaluation(
     sequentially). Raise this only against API tiers with headroom to match.
     """
     judge_threshold = get_settings().judge_score_threshold
+    started = time.monotonic()
+    logger.info(
+        "Scoring %d questions against %s@%s with %d metric(s), judge %s",
+        len(dataset),
+        pipeline_name,
+        pipeline_version,
+        len(metrics),
+        "on" if judge is not None else "off",
+    )
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         results = list(
@@ -126,6 +160,8 @@ def run_evaluation(
                 dataset,
             )
         )
+
+    logger.info("Scored %d questions in %.1fs", len(results), time.monotonic() - started)
 
     with session_scope() as session:
         run = save_run(
