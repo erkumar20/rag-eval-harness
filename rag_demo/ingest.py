@@ -14,8 +14,8 @@ from eval_harness.config import get_settings
 CORPUS_DIR = Path(__file__).parent / "data" / "corpus"
 COLLECTION_NAME = "fastapi_docs"
 EMBEDDING_MODEL_NAME = "BAAI/bge-small-en-v1.5"
-CHUNK_SIZE_TOKENS = 64
-CHUNK_OVERLAP_TOKENS = 8
+CHUNK_SIZE_TOKENS = 512
+CHUNK_OVERLAP_TOKENS = 50
 
 _encoding = tiktoken.get_encoding("cl100k_base")
 

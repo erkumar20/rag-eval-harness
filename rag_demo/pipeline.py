@@ -10,7 +10,7 @@ class DemoRAGPipeline:
     adapter (e.g. a future VarnueVed adapter) would.
     """
 
-    def __init__(self, retriever: HybridRetriever | None = None, top_k: int = 4):
+    def __init__(self, retriever: HybridRetriever | None = None, top_k: int = 1):
         self.retriever = retriever or HybridRetriever()
         self.top_k = top_k
 
