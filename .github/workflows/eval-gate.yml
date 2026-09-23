@@ -27,7 +27,11 @@ concurrency:
 jobs:
   eval-gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # A clean run is ~15 min, but a *failing* run is slower: low scores push more metrics
+    # under the judge threshold, so the judge fires more, and heavier token use draws more
+    # rate-limit backoff from both providers. A first validation run hit a 45-minute cap
+    # mid-evaluation and was cancelled, which wasted the spend and produced no verdict.
+    timeout-minutes: 60
 
     services:
       postgres:
