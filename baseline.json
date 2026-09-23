@@ -1,0 +1,11 @@
+{
+  "pipeline_name": "demo",
+  "pipeline_version": "v1-smoke-test",
+  "dataset_version": "golden_set-d01d724df8",
+  "recorded_at": "2026-09-23T19:03:57.249670+00:00",
+  "metrics": {
+    "faithfulness": 0.9286630036630036,
+    "context_recall": 0.8285714285714286,
+    "answer_relevance": 0.5582081906437665
+  }
+}

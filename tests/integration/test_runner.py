@@ -5,13 +5,19 @@ together, so faking storage too would leave that wiring unverified."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from sqlalchemy import select
 
 from eval_harness.dataset.schema import QAPair, QuestionCategory
 from eval_harness.judge.base import JudgeLLM
 from eval_harness.judge.schema import Diagnosis
 from eval_harness.metrics.base import Metric
-from eval_harness.runner.baseline import check_baseline_gate, set_baseline_from_run
+from eval_harness.runner.baseline import (
+    check_baseline_gate,
+    set_baseline_from_run,
+    write_baseline_file,
+)
 from eval_harness.runner.evaluate import run_evaluation
 from eval_harness.schemas import EvalInput, MetricResult
 from eval_harness.storage.db import session_scope
@@ -136,3 +142,72 @@ def test_baseline_gate_passes_with_no_prior_baseline_then_catches_a_real_regress
     assert second_gate.passed is False
     assert second_gate.metrics[0].baseline_value == 1.0
     assert second_gate.metrics[0].percent_drop == 0.8
+
+
+def test_file_baseline_gates_the_same_way_the_database_does(
+    pipeline_name: str, tmp_path: Path
+) -> None:
+    """CI has no persistent database, so it gates against a committed baseline file instead.
+    That path has to catch a regression exactly like the database path does -- otherwise the
+    CI gate silently passes everything, which is worse than having no gate at all."""
+    baseline_path = tmp_path / "baseline.json"
+
+    good_summary = run_evaluation(
+        FakePipeline(),
+        _dataset()[:1],
+        [ScoreByAnswerMetric()],
+        pipeline_name=pipeline_name,
+        pipeline_version="v1",
+        dataset_version="test-v1",
+    )
+    write_baseline_file(good_summary, baseline_path)
+
+    class RegressedPipeline:
+        def query(self, question: str) -> dict:
+            return {"answer": "a fabricated answer", "contexts": ["unrelated"]}
+
+    regressed_summary = run_evaluation(
+        RegressedPipeline(),
+        _dataset()[:1],
+        [ScoreByAnswerMetric()],
+        pipeline_name=pipeline_name,
+        pipeline_version="v2-regressed",
+        dataset_version="test-v1",
+    )
+
+    gate = check_baseline_gate(regressed_summary, baseline_file=baseline_path)
+    assert gate.passed is False
+    assert gate.metrics[0].baseline_value == 1.0
+    assert gate.metrics[0].percent_drop == 0.8
+    assert gate.dataset_changed is False
+
+
+def test_gate_flags_a_baseline_recorded_against_a_different_dataset(
+    pipeline_name: str, tmp_path: Path
+) -> None:
+    baseline_path = tmp_path / "baseline.json"
+
+    old_summary = run_evaluation(
+        FakePipeline(),
+        _dataset()[:1],
+        [ScoreByAnswerMetric()],
+        pipeline_name=pipeline_name,
+        pipeline_version="v1",
+        dataset_version="golden_set-OLDHASH",
+    )
+    write_baseline_file(old_summary, baseline_path)
+
+    new_dataset_summary = run_evaluation(
+        FakePipeline(),
+        _dataset()[:1],
+        [ScoreByAnswerMetric()],
+        pipeline_name=pipeline_name,
+        pipeline_version="v1",
+        dataset_version="golden_set-NEWHASH",
+    )
+
+    gate = check_baseline_gate(new_dataset_summary, baseline_file=baseline_path)
+    # Scores are unchanged, so the gate still passes -- but the mismatch is surfaced so a
+    # reviewer knows the comparison isn't strictly apples-to-apples.
+    assert gate.passed is True
+    assert gate.dataset_changed is True

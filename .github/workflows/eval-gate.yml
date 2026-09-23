@@ -1,0 +1,130 @@
+name: RAG eval gate
+
+# Blocks a PR when the demo pipeline's metric scores regress beyond the allowed threshold
+# (BASELINE_DROP_THRESHOLD, default 5%) versus the committed baseline.json.
+#
+# This costs real API spend and ~14 minutes per run, so it is deliberately scoped to PRs that
+# actually touch the pipeline or harness, and can also be triggered by hand.
+on:
+  pull_request:
+    paths:
+      - 'rag_demo/**'
+      - 'eval_harness/**'
+      - 'baseline.json'
+      - '.github/workflows/eval-gate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  # A second push to the same PR makes the in-flight run's result obsolete -- cancel it
+  # rather than paying for two full evaluations.
+  group: eval-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eval-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rag_eval
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/rag_eval
+      QDRANT_LOCAL_PATH: ./qdrant_data
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Install package
+        run: pip install -e ".[dev]"
+
+      # The demo pipeline embeds locally with bge-small-en-v1.5 (~130MB). Caching it keeps
+      # every run from re-downloading it from the HF hub.
+      - name: Cache embedding model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-bge-small-en-v1.5
+
+      - name: Apply database migrations
+        run: alembic upgrade head
+
+      # Qdrant runs in embedded local mode (a directory, no server), so the collection has to
+      # be built from the committed corpus on each fresh runner.
+      - name: Ingest corpus into Qdrant
+        run: python -m rag_demo.ingest
+
+      - name: Run evaluation and gate against baseline
+        id: gate
+        run: |
+          evalharness run \
+            --pipeline demo \
+            --pipeline-version "${{ github.sha }}" \
+            --gate \
+            --baseline-file baseline.json \
+            --summary-file gate-summary.md
+
+      # Runs even when the gate step failed -- a blocked PR is exactly when the reader most
+      # needs to see which metric moved and by how much.
+      - name: Publish summary
+        if: always()
+        run: cat gate-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment metric deltas on the PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync('gate-summary.md')) {
+              core.info('No gate summary produced -- the run failed before gating.');
+              return;
+            }
+            const marker = '<!-- rag-eval-gate -->';
+            const body = marker + '\n' + fs.readFileSync('gate-summary.md', 'utf8');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }

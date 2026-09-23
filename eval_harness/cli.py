@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.table import Table
 from sqlalchemy import select
 
+from eval_harness.config import get_settings
 from eval_harness.dataset.loader import DEFAULT_DATASET_PATH, dataset_version, load_golden_dataset
 from eval_harness.judge.gpt4o_judge import GPT4oJudge
 from eval_harness.metrics.base import Metric
@@ -16,7 +17,12 @@ from eval_harness.metrics.ragas_metrics import (
     ContextRecallMetric,
     FaithfulnessMetric,
 )
-from eval_harness.runner.baseline import check_baseline_gate, set_baseline_from_run
+from eval_harness.runner.baseline import (
+    GateResult,
+    check_baseline_gate,
+    set_baseline_from_run,
+    write_baseline_file,
+)
 from eval_harness.runner.evaluate import RunSummary, run_evaluation
 from eval_harness.storage.db import session_scope
 from eval_harness.storage.models import PipelineVersion, Result, Run
@@ -41,6 +47,71 @@ def _load_pipeline(name: str):
     raise typer.BadParameter(f"Unknown pipeline {name!r}. Registered pipelines: demo")
 
 
+def _summary_from_run(run_id: int) -> RunSummary:
+    """Rebuilds a RunSummary from a persisted run, so the baseline commands can work off a
+    run id rather than only off a run that just happened in-process."""
+    with session_scope() as session:
+        db_run = session.get(Run, run_id)
+        if db_run is None:
+            console.print(f"[red]No run with id {run_id}.[/red]")
+            raise typer.Exit(code=1)
+        pipeline_version = session.get(PipelineVersion, db_run.pipeline_version_id)
+        results = session.scalars(select(Result).where(Result.run_id == run_id)).all()
+
+        sums: dict[str, float] = {}
+        counts: dict[str, int] = {}
+        for result in results:
+            for metric_name, score in result.metric_scores.items():
+                sums[metric_name] = sums.get(metric_name, 0.0) + score
+                counts[metric_name] = counts.get(metric_name, 0) + 1
+
+        return RunSummary(
+            run_id=run_id,
+            pipeline_name=pipeline_version.name,
+            pipeline_version=pipeline_version.version,
+            dataset_version=db_run.dataset_version,
+            mean_scores={name: sums[name] / counts[name] for name in sums},
+        )
+
+
+def _gate_markdown(summary: RunSummary, gate_result: GateResult) -> str:
+    """Markdown table of metric deltas, posted by CI as a PR comment."""
+    verdict = "✅ **Gate passed**" if gate_result.passed else "❌ **Gate FAILED**"
+    threshold = get_settings().baseline_drop_threshold
+
+    lines = [
+        f"## RAG eval gate — `{summary.pipeline_name}`",
+        "",
+        verdict,
+        "",
+        "| Metric | Baseline | Current | Change | Status |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for gate in gate_result.metrics:
+        if gate.baseline_value is None:
+            lines.append(f"| `{gate.metric_name}` | — | {gate.current_value:.3f} | — | no baseline |")
+            continue
+        # percent_drop is positive when the score fell, so negate it to read as a delta.
+        status = "pass" if gate.passed else "**FAIL**"
+        lines.append(
+            f"| `{gate.metric_name}` | {gate.baseline_value:.3f} | {gate.current_value:.3f} "
+            f"| {-gate.percent_drop:+.1%} | {status} |"
+        )
+
+    lines += ["", f"_Allowed drop: {threshold:.0%}. Dataset: `{summary.dataset_version}`._"]
+    if gate_result.dataset_changed:
+        lines += [
+            "",
+            (
+                "> ⚠️ The golden set changed since this baseline was recorded "
+                f"(`{gate_result.baseline_dataset_version}` → "
+                f"`{gate_result.run_dataset_version}`). "
+                "Score moves may reflect the dataset, not the pipeline."
+            ),
+        ]
+    return "\n".join(lines) + "\n"
+
+
 def _print_scores(summary: RunSummary) -> None:
     table = Table(title=f"Run {summary.run_id} -- {summary.pipeline_name}@{summary.pipeline_version}")
     table.add_column("Metric")
@@ -59,7 +130,13 @@ def run(
     ),
     use_judge: bool = typer.Option(True, help="Invoke the GPT-4o judge on failing scores"),
     gate: bool = typer.Option(
-        False, help="Check the run against the stored baseline and exit non-zero on regression"
+        False, help="Check the run against the baseline and exit non-zero on regression"
+    ),
+    baseline_file: Path | None = typer.Option(  # noqa: B008 -- standard Typer pattern, ruff misflags Path-typed Options
+        None, help="Read the baseline from this JSON file instead of the database (used by CI)"
+    ),
+    summary_file: Path | None = typer.Option(  # noqa: B008 -- standard Typer pattern, ruff misflags Path-typed Options
+        None, help="Write a markdown gate summary here (CI posts it as a PR comment)"
     ),
 ) -> None:
     """Run the golden dataset against a pipeline, score it, and persist the run."""
@@ -82,7 +159,15 @@ def run(
     _print_scores(summary)
 
     if gate:
-        gate_result = check_baseline_gate(summary)
+        gate_result = check_baseline_gate(summary, baseline_file=baseline_file)
+
+        if gate_result.dataset_changed:
+            console.print(
+                "[yellow]Warning: the golden set changed since this baseline was recorded "
+                f"({gate_result.baseline_dataset_version} -> {gate_result.run_dataset_version}). "
+                "Score moves may reflect the dataset, not the pipeline.[/yellow]"
+            )
+
         for metric_gate in gate_result.metrics:
             if metric_gate.baseline_value is None:
                 console.print(f"  {metric_gate.metric_name}: no baseline set yet, skipping gate")
@@ -94,42 +179,38 @@ def run(
                     f"current={metric_gate.current_value:.3f}, "
                     f"drop={metric_gate.percent_drop:.1%})"
                 )
+
+        if summary_file is not None:
+            summary_file.write_text(_gate_markdown(summary, gate_result), encoding="utf-8")
+
         if not gate_result.passed:
             console.print("[red]Gate FAILED: a metric regressed beyond the allowed threshold.[/red]")
             raise typer.Exit(code=1)
         console.print("[green]Gate passed.[/green]")
 
 
+@app.command("baseline-export")
+def baseline_export(
+    run_id: int,
+    output: Path = typer.Option(  # noqa: B008 -- standard Typer pattern, ruff misflags Path-typed Options
+        Path("baseline.json"), help="Where to write the baseline snapshot"
+    ),
+) -> None:
+    """Export a run's mean scores to a committed baseline file for CI to gate against."""
+    summary = _summary_from_run(run_id)
+    write_baseline_file(summary, output)
+    console.print(f"Baseline written to {output} from run {run_id}:")
+    for metric_name, value in summary.mean_scores.items():
+        console.print(f"  {metric_name}: {value:.3f}")
+
+
 @app.command("baseline-set")
 def baseline_set(run_id: int) -> None:
     """Set the given run's mean scores as the new baseline for its pipeline."""
-    with session_scope() as session:
-        db_run = session.get(Run, run_id)
-        if db_run is None:
-            console.print(f"[red]No run with id {run_id}.[/red]")
-            raise typer.Exit(code=1)
-        pipeline_version = session.get(PipelineVersion, db_run.pipeline_version_id)
-        results = session.scalars(select(Result).where(Result.run_id == run_id)).all()
-
-        sums: dict[str, float] = {}
-        counts: dict[str, int] = {}
-        for result in results:
-            for metric_name, score in result.metric_scores.items():
-                sums[metric_name] = sums.get(metric_name, 0.0) + score
-                counts[metric_name] = counts.get(metric_name, 0) + 1
-        mean_scores = {name: sums[name] / counts[name] for name in sums}
-
-        summary = RunSummary(
-            run_id=run_id,
-            pipeline_name=pipeline_version.name,
-            pipeline_version=pipeline_version.version,
-            dataset_version=db_run.dataset_version,
-            mean_scores=mean_scores,
-        )
-
+    summary = _summary_from_run(run_id)
     set_baseline_from_run(summary)
     console.print(f"Baseline set for {summary.pipeline_name!r} from run {run_id}:")
-    for metric_name, value in mean_scores.items():
+    for metric_name, value in summary.mean_scores.items():
         console.print(f"  {metric_name}: {value:.3f}")
 
 
