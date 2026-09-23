@@ -36,10 +36,17 @@ def test_metrics_raise_clear_error_without_a_real_api_key(
     monkeypatch.setattr(
         ragas_metrics_module, "get_settings", lambda: Settings(openai_api_key=bad_key)
     )
-    ragas_metrics_module._openai_client = None  # reset the lazily-initialized singleton
+
+    # The underlying ragas metric (and its OpenAI client) is now built lazily per-thread on
+    # first score() call, not eagerly in __init__ -- see ragas_metrics.py's _get_openai_client
+    # docstring for why (constructing it once in whatever thread calls __init__ and sharing
+    # it across the runner's worker threads caused a severe concurrency bug). So construction
+    # itself can't fail on a bad key anymore; the first real use still must.
+    metric = ragas_metrics_module.FaithfulnessMetric()
+    eval_input = EvalInput(question="q", answer="a", contexts=["c"])
 
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY is not set"):
-        ragas_metrics_module.FaithfulnessMetric()
+        metric.score(eval_input)
 
 
 def test_metric_names():

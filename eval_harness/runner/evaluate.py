@@ -101,14 +101,19 @@ def run_evaluation(
     pipeline_version: str,
     judge: JudgeLLM | None = None,
     dataset_version: str | None = None,
-    max_workers: int = 5,
+    max_workers: int = 1,
 ) -> RunSummary:
     """Scores every question in `dataset` against `pipeline` with every metric in `metrics`,
     invoking `judge` only on scores below the configured threshold (cost control from
     Phase 6), persists the full run via Phase 8's storage layer, and returns a summary.
 
-    Concurrent across questions (LLM calls dominate latency) -- each metric/judge call is
-    synchronous, so a thread pool is enough without needing every call site to be async.
+    Parallelism across questions is supported but defaults to 1 (sequential), because the
+    free API tiers this project targets are rate-limited well below what concurrency needs:
+    Groq's free tier allows 8k tokens/minute, and one reasoning-model answer costs ~2.5k, so
+    even 5 concurrent questions 429 immediately. The SDKs then auto-retry with backoff, which
+    turns into a retry-thrash loop that is *slower* than running sequentially (measured: a
+    5-worker run of the golden set hadn't finished after 24 minutes, versus ~25s/question
+    sequentially). Raise this only against API tiers with headroom to match.
     """
     judge_threshold = get_settings().judge_score_threshold
 

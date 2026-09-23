@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -61,12 +62,19 @@ def build_chunks(corpus_dir: Path = CORPUS_DIR) -> list[Chunk]:
 
 
 _embedder: SentenceTransformer | None = None
+_embedder_lock = threading.Lock()
 
 
 def get_embedder() -> SentenceTransformer:
+    """Thread-safe lazy singleton. The Phase 9 runner scores questions concurrently across
+    a thread pool -- without this lock, multiple threads hitting this on first use each
+    started their own `SentenceTransformer(...)` load simultaneously, which segfaulted
+    (native PyTorch/BLAS state during concurrent weight loading is not thread-safe)."""
     global _embedder
     if _embedder is None:
-        _embedder = SentenceTransformer(EMBEDDING_MODEL_NAME)
+        with _embedder_lock:
+            if _embedder is None:
+                _embedder = SentenceTransformer(EMBEDDING_MODEL_NAME)
     return _embedder
 
 

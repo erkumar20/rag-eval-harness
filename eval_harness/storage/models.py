@@ -59,7 +59,11 @@ class Result(Base):
     answer: Mapped[str] = mapped_column(Text)
     contexts: Mapped[list] = mapped_column(JSONB)
     metric_scores: Mapped[dict] = mapped_column(JSONB)
-    judge_diagnosis: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # none_as_null=True, otherwise SQLAlchemy stores an unjudged question's Python None as
+    # JSON null rather than SQL NULL, and `WHERE judge_diagnosis IS NOT NULL` then silently
+    # matches every row -- which made a first real run look like all 35 questions had been
+    # judged when only 25 actually were.
+    judge_diagnosis: Mapped[list | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     run: Mapped[Run] = relationship(back_populates="results")
