@@ -1,5 +1,10 @@
 """Integration tests against the real local Postgres instance (Phase 8 step 6). Not mocked
--- these exercise actual DDL/DML against `rag_eval`, unlike the mocked unit tests elsewhere."""
+-- these exercise actual DDL/DML against `rag_eval`, unlike the mocked unit tests elsewhere.
+
+Every test takes the `pipeline_name` fixture (tests/integration/conftest.py) instead of a
+hardcoded string, so re-running the suite never collides with rows a previous run left behind
+and never accumulates permanent test data in the dev database.
+"""
 
 from __future__ import annotations
 
@@ -49,11 +54,13 @@ def sample_results() -> list[EvalResult]:
     ]
 
 
-def test_save_run_persists_results_and_diagnoses(sample_results: list[EvalResult]) -> None:
+def test_save_run_persists_results_and_diagnoses(
+    sample_results: list[EvalResult], pipeline_name: str
+) -> None:
     with session_scope() as session:
         run = save_run(
             session,
-            pipeline_name="test-pipeline",
+            pipeline_name=pipeline_name,
             pipeline_version="test-v1",
             dataset_version="v1",
             results=sample_results,
@@ -67,7 +74,7 @@ def test_save_run_persists_results_and_diagnoses(sample_results: list[EvalResult
 
         pipeline_version = session.get(PipelineVersion, persisted_run.pipeline_version_id)
         assert pipeline_version is not None
-        assert pipeline_version.name == "test-pipeline"
+        assert pipeline_version.name == pipeline_name
 
         results = session.scalars(select(Result).where(Result.run_id == run_id)).all()
         assert len(results) == 2
@@ -86,18 +93,20 @@ def test_save_run_persists_results_and_diagnoses(sample_results: list[EvalResult
         assert "Redis" in q002.judge_diagnosis[0]["explanation"]
 
 
-def test_save_run_reuses_existing_pipeline_version(sample_results: list[EvalResult]) -> None:
+def test_save_run_reuses_existing_pipeline_version(
+    sample_results: list[EvalResult], pipeline_name: str
+) -> None:
     with session_scope() as session:
         run_a = save_run(
             session,
-            pipeline_name="test-pipeline-reuse",
+            pipeline_name=pipeline_name,
             pipeline_version="v1",
             dataset_version="v1",
             results=sample_results[:1],
         )
         run_b = save_run(
             session,
-            pipeline_name="test-pipeline-reuse",
+            pipeline_name=pipeline_name,
             pipeline_version="v1",
             dataset_version="v1",
             results=sample_results[:1],
@@ -105,34 +114,22 @@ def test_save_run_reuses_existing_pipeline_version(sample_results: list[EvalResu
         assert run_a.pipeline_version_id == run_b.pipeline_version_id
 
 
-def test_set_baseline_then_get_latest_baseline_roundtrips() -> None:
+def test_set_baseline_then_get_latest_baseline_roundtrips(pipeline_name: str) -> None:
     with session_scope() as session:
-        set_baseline(
-            session, pipeline_name="test-baseline-pipeline", metric_name="faithfulness", value=0.9
-        )
-        value = get_latest_baseline(
-            session, pipeline_name="test-baseline-pipeline", metric_name="faithfulness"
-        )
+        set_baseline(session, pipeline_name=pipeline_name, metric_name="faithfulness", value=0.9)
+        value = get_latest_baseline(session, pipeline_name=pipeline_name, metric_name="faithfulness")
         assert value == 0.9
 
 
-def test_set_baseline_overwrites_rather_than_duplicates() -> None:
+def test_set_baseline_overwrites_rather_than_duplicates(pipeline_name: str) -> None:
     with session_scope() as session:
-        set_baseline(
-            session, pipeline_name="test-baseline-overwrite", metric_name="faithfulness", value=0.8
-        )
-        set_baseline(
-            session, pipeline_name="test-baseline-overwrite", metric_name="faithfulness", value=0.95
-        )
-        value = get_latest_baseline(
-            session, pipeline_name="test-baseline-overwrite", metric_name="faithfulness"
-        )
+        set_baseline(session, pipeline_name=pipeline_name, metric_name="faithfulness", value=0.8)
+        set_baseline(session, pipeline_name=pipeline_name, metric_name="faithfulness", value=0.95)
+        value = get_latest_baseline(session, pipeline_name=pipeline_name, metric_name="faithfulness")
         assert value == 0.95
 
 
-def test_get_latest_baseline_returns_none_when_unset() -> None:
+def test_get_latest_baseline_returns_none_when_unset(pipeline_name: str) -> None:
     with session_scope() as session:
-        value = get_latest_baseline(
-            session, pipeline_name="never-baselined-pipeline", metric_name="faithfulness"
-        )
+        value = get_latest_baseline(session, pipeline_name=pipeline_name, metric_name="faithfulness")
         assert value is None
