@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     groq_api_key: str | None = None
     qdrant_local_path: str = "./qdrant_data"
-    database_url: str = "postgresql://localhost:5432/rag_eval"
+    database_url: str = "postgresql+psycopg://localhost:5432/rag_eval"
     baseline_drop_threshold: float = 0.05
 
     # RAGAS metrics need their own LLM/embeddings (separate from the GPT-4o judge in Phase 6).

@@ -52,6 +52,9 @@ include = ["eval_harness*", "rag_demo*"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Alembic's own script.py.mako template generates this style; not worth diverging from
+# alembic's generator on every migration.
+extend-exclude = ["eval_harness/storage/migrations/versions"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
