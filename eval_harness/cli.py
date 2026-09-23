@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
@@ -140,6 +141,13 @@ def run(
     ),
 ) -> None:
     """Run the golden dataset against a pipeline, score it, and persist the run."""
+    # A run takes 15+ minutes against real APIs; without this the process is silent for all
+    # of it, so there's no way to tell a slow run from a stuck one (which cost two cancelled
+    # CI runs to learn).
+    logging.basicConfig(
+        level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%H:%M:%S", force=True
+    )
+
     dataset_path = dataset or DEFAULT_DATASET_PATH
     qa_pairs = load_golden_dataset(dataset_path)
     ds_version = dataset_version(dataset_path)
