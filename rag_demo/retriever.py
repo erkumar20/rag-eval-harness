@@ -79,7 +79,10 @@ class HybridRetriever:
         bm25_ranking = self._bm25_ranking(question, pool_size)
 
         fused = _reciprocal_rank_fusion([vector_ranking, bm25_ranking])
-        top_ids = sorted(fused, key=fused.get, reverse=False)[:k]
+        # reverse=True is load-bearing: RRF scores are higher-is-better, so flipping this
+        # silently returns the *worst* candidates. Nothing crashes and no test fails -- it
+        # only shows up as a quality drop, which is what the eval gate exists to catch.
+        top_ids = sorted(fused, key=fused.get, reverse=True)[:k]
 
         return [
             RetrievedChunk(
