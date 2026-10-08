@@ -13,7 +13,7 @@ from eval_harness.judge.schema import Diagnosis
 from eval_harness.metrics.base import Metric
 from eval_harness.schemas import EvalInput, EvalResult, MetricResult
 from eval_harness.storage.db import session_scope
-from eval_harness.storage.repository import save_run
+from eval_harness.storage.repository import create_run, finish_run, save_result
 
 logger = logging.getLogger(__name__)
 
@@ -151,27 +151,39 @@ def run_evaluation(
         "on" if judge is not None else "off",
     )
 
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        results = list(
-            pool.map(
-                lambda qa: _score_question(
-                    qa, pipeline, metrics, judge, judge_threshold, pipeline_version, dataset_version
-                ),
-                dataset,
-            )
-        )
-
-    logger.info("Scored %d questions in %.1fs", len(results), time.monotonic() - started)
-
+    # The run row is created before any scoring, and each result is committed as it lands,
+    # so an interrupted run (timeout, cancel, crash, machine sleeping) keeps the questions it
+    # already paid for instead of discarding all of them. Such a run is left without
+    # `finished_at`, which is how a partial run is told apart from a complete one.
     with session_scope() as session:
-        run = save_run(
+        run_id = create_run(
             session,
             pipeline_name=pipeline_name,
             pipeline_version=pipeline_version,
             dataset_version=dataset_version,
-            results=results,
+        ).id
+
+    results: list[EvalResult] = []
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        scored = pool.map(
+            lambda qa: _score_question(
+                qa, pipeline, metrics, judge, judge_threshold, pipeline_version, dataset_version
+            ),
+            dataset,
         )
-        run_id = run.id
+        for eval_result in scored:
+            # One short transaction per question rather than one long-held connection, so
+            # each result is durable the moment it exists.
+            with session_scope() as session:
+                save_result(session, run_id=run_id, eval_result=eval_result)
+            results.append(eval_result)
+
+    with session_scope() as session:
+        finish_run(session, run_id=run_id)
+
+    logger.info(
+        "Scored %d questions in %.1fs (run %d)", len(results), time.monotonic() - started, run_id
+    )
 
     return RunSummary(
         run_id=run_id,

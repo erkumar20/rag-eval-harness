@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from sqlalchemy import select
 
 from eval_harness.dataset.schema import QAPair, QuestionCategory
@@ -21,7 +22,7 @@ from eval_harness.runner.baseline import (
 from eval_harness.runner.evaluate import run_evaluation
 from eval_harness.schemas import EvalInput, MetricResult
 from eval_harness.storage.db import session_scope
-from eval_harness.storage.models import Result
+from eval_harness.storage.models import PipelineVersion, Result, Run
 
 
 class FakePipeline:
@@ -142,6 +143,64 @@ def test_baseline_gate_passes_with_no_prior_baseline_then_catches_a_real_regress
     assert second_gate.passed is False
     assert second_gate.metrics[0].baseline_value == 1.0
     assert second_gate.metrics[0].percent_drop == 0.8
+
+
+class ExplodingMetric(Metric):
+    """Fails after N successful scorings, standing in for any mid-run interruption
+    (timeout, cancel, crash, machine sleeping)."""
+
+    name = "fake_score"
+
+    def __init__(self, succeed_for: int) -> None:
+        self.succeed_for = succeed_for
+        self.seen = 0
+
+    def score(self, eval_input: EvalInput) -> MetricResult:
+        self.seen += 1
+        if self.seen > self.succeed_for:
+            raise RuntimeError("simulated interruption")
+        return MetricResult(metric_name=self.name, score=1.0)
+
+
+def test_interrupted_run_keeps_the_questions_it_already_scored(pipeline_name: str) -> None:
+    """A run costs real API spend per question. Persisting only at the end meant any
+    interruption threw all of it away -- which actually happened to a 20-question run."""
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        run_evaluation(
+            FakePipeline(),
+            _dataset(),
+            [ExplodingMetric(succeed_for=1)],
+            pipeline_name=pipeline_name,
+            pipeline_version="v1",
+            dataset_version="test-v1",
+        )
+
+    with session_scope() as session:
+        run = session.scalars(
+            select(Run).join(PipelineVersion).where(PipelineVersion.name == pipeline_name)
+        ).one()
+        results = session.scalars(select(Result).where(Result.run_id == run.id)).all()
+
+        # The first question survived; the second never completed.
+        assert len(results) == 1
+        assert results[0].question_id == "r001"
+        # No finish stamp is what marks this run as partial rather than complete.
+        assert run.finished_at is None
+
+
+def test_completed_run_is_stamped_finished(pipeline_name: str) -> None:
+    summary = run_evaluation(
+        FakePipeline(),
+        _dataset(),
+        [ScoreByAnswerMetric()],
+        pipeline_name=pipeline_name,
+        pipeline_version="v1",
+        dataset_version="test-v1",
+    )
+    with session_scope() as session:
+        run = session.get(Run, summary.run_id)
+        assert run is not None
+        assert run.finished_at is not None
 
 
 def test_file_baseline_gates_the_same_way_the_database_does(

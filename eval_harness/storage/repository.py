@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
@@ -22,6 +24,56 @@ def _get_or_create_pipeline_version(session: Session, name: str, version: str) -
     return pipeline_version
 
 
+def _result_row(run_id: int, eval_result: EvalResult) -> Result:
+    return Result(
+        run_id=run_id,
+        question_id=eval_result.qa_id,
+        question=eval_result.question,
+        answer=eval_result.answer,
+        contexts=eval_result.contexts,
+        metric_scores={
+            metric_result.metric_name: metric_result.score
+            for metric_result in eval_result.metric_results
+        },
+        judge_diagnosis=(
+            [diagnosis.model_dump(mode="json") for diagnosis in eval_result.judge_diagnoses]
+            if eval_result.judge_diagnoses
+            else None
+        ),
+    )
+
+
+def create_run(
+    session: Session,
+    *,
+    pipeline_name: str,
+    pipeline_version: str,
+    dataset_version: str | None,
+) -> Run:
+    """Opens a run before any question has been scored, so results can be persisted as they
+    land rather than only at the end (see `save_result`)."""
+    version_row = _get_or_create_pipeline_version(session, pipeline_name, pipeline_version)
+    run = Run(pipeline_version=version_row, dataset_version=dataset_version)
+    session.add(run)
+    session.flush()
+    return run
+
+
+def save_result(session: Session, *, run_id: int, eval_result: EvalResult) -> None:
+    """Persists one question's result into an already-open run."""
+    session.add(_result_row(run_id, eval_result))
+    session.flush()
+
+
+def finish_run(session: Session, *, run_id: int) -> None:
+    """Stamps a run as complete. A run with results but no `finished_at` is a partial run --
+    one that was interrupted partway through."""
+    run = session.get(Run, run_id)
+    if run is not None:
+        run.finished_at = datetime.now(UTC)
+        session.flush()
+
+
 def save_run(
     session: Session,
     *,
@@ -30,33 +82,21 @@ def save_run(
     dataset_version: str | None,
     results: list[EvalResult],
 ) -> Run:
-    """Persists one full evaluation run and all its per-question results. Called by
-    Phase 9's runner after every question in the golden set has been scored."""
-    version_row = _get_or_create_pipeline_version(session, pipeline_name, pipeline_version)
-    run = Run(pipeline_version=version_row, dataset_version=dataset_version)
-    session.add(run)
-    session.flush()
+    """Persists a complete run and all its results in one call.
 
+    Convenience for callers that already hold every result (tests, backfills). The runner
+    uses `create_run`/`save_result`/`finish_run` instead so an interrupted run keeps the
+    questions it already paid for.
+    """
+    run = create_run(
+        session,
+        pipeline_name=pipeline_name,
+        pipeline_version=pipeline_version,
+        dataset_version=dataset_version,
+    )
     for eval_result in results:
-        session.add(
-            Result(
-                run_id=run.id,
-                question_id=eval_result.qa_id,
-                question=eval_result.question,
-                answer=eval_result.answer,
-                contexts=eval_result.contexts,
-                metric_scores={
-                    metric_result.metric_name: metric_result.score
-                    for metric_result in eval_result.metric_results
-                },
-                judge_diagnosis=(
-                    [diagnosis.model_dump(mode="json") for diagnosis in eval_result.judge_diagnoses]
-                    if eval_result.judge_diagnoses
-                    else None
-                ),
-            )
-        )
-
+        session.add(_result_row(run.id, eval_result))
+    run.finished_at = datetime.now(UTC)
     session.flush()
     return run
 
