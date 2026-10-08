@@ -79,7 +79,7 @@ class HybridRetriever:
         bm25_ranking = self._bm25_ranking(question, pool_size)
 
         fused = _reciprocal_rank_fusion([vector_ranking, bm25_ranking])
-        top_ids = sorted(fused, key=fused.get, reverse=True)[:k]
+        top_ids = sorted(fused, key=fused.get, reverse=False)[:k]
 
         return [
             RetrievedChunk(
