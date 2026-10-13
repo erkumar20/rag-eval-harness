@@ -147,7 +147,14 @@ class AnswerRelevanceMetric(Metric):
             embeddings = embedding_factory(
                 "openai", model=self._embedding_model or settings.ragas_embedding_model, client=client
             )
-            self._thread_local.metric = _RagasAnswerRelevancy(llm=llm, embeddings=embeddings)
+            # ragas' own typing is inconsistent here: embedding_factory is declared as
+            # returning a union of its legacy and current embedding base classes, while
+            # AnswerRelevancy accepts only the current one. The object it actually returns
+            # for "openai" is the accepted type.
+            self._thread_local.metric = _RagasAnswerRelevancy(
+                llm=llm,
+                embeddings=embeddings,  # type: ignore[arg-type]
+            )
         return self._thread_local.metric
 
     def score(self, eval_input: EvalInput) -> MetricResult:

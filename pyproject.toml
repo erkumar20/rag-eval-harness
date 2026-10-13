@@ -56,5 +56,17 @@ target-version = "py311"
 # alembic's generator on every migration.
 extend-exclude = ["eval_harness/storage/migrations/versions"]
 
+[tool.mypy]
+# No python_version pin: it makes mypy parse installed stubs against that version, and
+# numpy's stubs use 3.12+ syntax, so pinning to the 3.11 floor breaks the run outright.
+# Defaulting to the running interpreter matches both local dev and CI.
+#
+# ragas, qdrant_client and sentence_transformers ship little or no type information, and
+# their stubs aren't worth vendoring for this project.
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: hits the real local Postgres instance (no API calls, but needs a database)",
+]

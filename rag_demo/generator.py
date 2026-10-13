@@ -64,4 +64,14 @@ def generate_answer(question: str, contexts: list[str], model: str = DEFAULT_MOD
         # in -> same answer out), which matters for regression gating in Phase 10.
         temperature=0.0,
     )
-    return response.choices[0].message.content.strip()
+    content = response.choices[0].message.content
+    if content is None:
+        # Reasoning models can return no visible content at all -- gpt-oss-20b does this when
+        # the token budget is spent on hidden chain-of-thought. Without this, the pipeline
+        # dies on `.strip()` with an AttributeError that points nowhere near the cause.
+        raise RuntimeError(
+            f"{model} returned no answer content (finish_reason="
+            f"{response.choices[0].finish_reason!r}). For a reasoning model this usually means "
+            "max_tokens was consumed by hidden reasoning before any answer was emitted."
+        )
+    return content.strip()

@@ -1,0 +1,67 @@
+name: CI
+
+# Lint, type-check and test on every push. Deliberately separate from eval-gate.yml: this
+# makes no API calls and needs no secrets, so it runs in a couple of minutes for free on
+# every commit, while the eval gate only runs on PRs that touch the pipeline or harness.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      # The integration tests exercise the real storage layer rather than mocking it, so a
+      # database is required even though no API keys are.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rag_eval
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/rag_eval
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Install package
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Type check
+        run: mypy eval_harness/ rag_demo/
+
+      - name: Apply database migrations
+        run: alembic upgrade head
+
+      # No OPENAI_API_KEY or GROQ_API_KEY is set for this job, which is the point: every
+      # test either fakes the pipeline/metrics/judge or asserts on the error path taken when
+      # a key is absent. If a test ever starts needing a live key, this job fails and says so.
+      - name: Test
+        run: pytest -q

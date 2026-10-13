@@ -49,12 +49,20 @@ class HybridRetriever:
         points, _ = self.client.scroll(
             collection_name=COLLECTION_NAME, limit=10_000, with_payload=True, with_vectors=False
         )
-        self._chunks_by_id = {
-            p.id: RetrievedChunk(
-                id=p.id, text=p.payload["text"], source_file=p.payload["source_file"], score=0.0
+        # Qdrant types point ids as int | str | UUID because it accepts all three, and
+        # payloads as optional. Ingest only ever writes integer ids with both payload keys
+        # present, so narrowing here is safe -- and asserting it means a malformed collection
+        # fails loudly at load instead of surfacing as a confusing error mid-run.
+        self._chunks_by_id = {}
+        for point in points:
+            assert isinstance(point.id, int), f"expected integer point id, got {point.id!r}"
+            assert point.payload is not None, f"point {point.id} has no payload"
+            self._chunks_by_id[point.id] = RetrievedChunk(
+                id=point.id,
+                text=point.payload["text"],
+                source_file=point.payload["source_file"],
+                score=0.0,
             )
-            for p in points
-        }
         self._bm25_ids = list(self._chunks_by_id.keys())
         tokenized = [_tokenize(self._chunks_by_id[cid].text) for cid in self._bm25_ids]
         self._bm25 = BM25Okapi(tokenized) if tokenized else None
@@ -64,7 +72,8 @@ class HybridRetriever:
         hits = self.client.query_points(
             collection_name=COLLECTION_NAME, query=query_vector, limit=pool_size
         ).points
-        return [hit.id for hit in hits]
+        # Same int-id narrowing as _load_index; ingest only writes integer ids.
+        return [hit.id for hit in hits if isinstance(hit.id, int)]
 
     def _bm25_ranking(self, question: str, pool_size: int) -> list[int]:
         if self._bm25 is None:
@@ -82,7 +91,7 @@ class HybridRetriever:
         # reverse=True is load-bearing: RRF scores are higher-is-better, so flipping this
         # silently returns the *worst* candidates. Nothing crashes and no test fails -- it
         # only shows up as a quality drop, which is what the eval gate exists to catch.
-        top_ids = sorted(fused, key=fused.get, reverse=True)[:k]
+        top_ids = sorted(fused, key=lambda cid: fused[cid], reverse=True)[:k]
 
         return [
             RetrievedChunk(

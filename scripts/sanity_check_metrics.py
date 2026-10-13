@@ -16,10 +16,14 @@ from eval_harness.metrics.ragas_metrics import (
 from eval_harness.schemas import EvalInput
 
 BG_TASK_CONTEXTS = [
-    "First, import BackgroundTasks and define a parameter in your path operation function "
-    "with a type declaration of BackgroundTasks.",
-    "FastAPI will create the object of type BackgroundTasks for you and pass it as that "
-    "parameter.",
+    (
+        "First, import BackgroundTasks and define a parameter in your path operation function "
+        "with a type declaration of BackgroundTasks."
+    ),
+    (
+        "FastAPI will create the object of type BackgroundTasks for you and pass it as that "
+        "parameter."
+    ),
     'background_tasks.add_task(write_notification, email, message="some notification")',
 ]
 BG_TASK_GROUND_TRUTH = (
@@ -92,8 +96,10 @@ CASES = [
                 "FastAPI treats it as required."
             ),
             contexts=[
-                "when you want to make a query parameter required, you can just not declare "
-                "any default value",
+                (
+                    "when you want to make a query parameter required, you can just not declare "
+                    "any default value"
+                ),
                 "Here the query parameter `needy` is a required query parameter of type `str`.",
             ],
             ground_truth_answer=(

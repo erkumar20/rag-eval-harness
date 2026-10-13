@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import sys
 from pathlib import Path
 
 import typer
@@ -57,6 +56,10 @@ def _summary_from_run(run_id: int) -> RunSummary:
             console.print(f"[red]No run with id {run_id}.[/red]")
             raise typer.Exit(code=1)
         pipeline_version = session.get(PipelineVersion, db_run.pipeline_version_id)
+        if pipeline_version is None:
+            # Only reachable if a run's pipeline_versions row was deleted out from under it.
+            console.print(f"[red]Run {run_id} references a missing pipeline version.[/red]")
+            raise typer.Exit(code=1)
         results = session.scalars(select(Result).where(Result.run_id == run_id)).all()
 
         sums: dict[str, float] = {}
@@ -89,7 +92,9 @@ def _gate_markdown(summary: RunSummary, gate_result: GateResult) -> str:
         "| --- | --- | --- | --- | --- |",
     ]
     for gate in gate_result.metrics:
-        if gate.baseline_value is None:
+        # Both are set together, or neither is -- checking both keeps that explicit rather
+        # than relying on the reader (or a type checker) inferring the correlation.
+        if gate.baseline_value is None or gate.percent_drop is None:
             lines.append(f"| `{gate.metric_name}` | — | {gate.current_value:.3f} | — | no baseline |")
             continue
         # percent_drop is positive when the score fell, so negate it to read as a delta.
@@ -256,4 +261,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
