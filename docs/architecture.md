@@ -107,6 +107,10 @@ the answer alone and forces the score to 0 when the answer reads as evasive. So:
   the fraction of out-of-scope questions correctly declined, which is the hallucination check for
   out-of-scope questions. It uses a small LLM classifier (a string match on "sorry" would be
   brittle); the classifier is injectable so tests need no API key.
+- `context_recall` skips them too. Its reference for these questions is "not answerable from this
+  documentation", and whether retrieved text "supports" that is close to a coin flip: re-scoring
+  *identical* stored inputs five times gave `[1,0,1,1,1]` and `[0,0,0,0,1]` on two of the five
+  out-of-scope questions, while five answerable controls were identical every time.
 - Reports show per-category means, because one overall mean hides which kind of question moved.
 
 Re-scoring the first full run this way: `answer_relevance` 0.558 over all 35 becomes 0.628 over
@@ -212,11 +216,17 @@ approving their own change.
 
 ### Known weakness
 
-The threshold is currently a single 5% figure for all metrics, and that is too tight for the
-noise. Two runs of functionally identical code produced a +9.2% swing in `context_recall`, so a
-clean PR can fail by chance. The fix is per-metric thresholds derived from measured variance
-across several runs of unchanged code; it is unresolved because measuring it is constrained by
-the token budget below.
+The threshold is a single 5% figure for all metrics. Two CI runs of functionally identical code
+scored `context_recall` about 10% above the baseline (0.905 and 0.914 vs 0.829), which would fail
+a gate at 5% if it were a drop.
+
+Much of that swing has now been traced: the five out-of-scope questions are 1/35 of the mean each
+(0.029), their `context_recall` flips between identical runs, and three flips is 0.086 — the size
+of the gap. Those questions no longer contribute to `context_recall` (see Metrics), which should
+remove most of the noise. Two things remain open: the committed baseline predates that change and
+must be regenerated, and the remaining variance on answerable questions has not yet been measured
+across repeated full runs, so per-metric thresholds are still to be derived from data. Measuring
+it is constrained by the token budget below.
 
 ## Operational constraints
 

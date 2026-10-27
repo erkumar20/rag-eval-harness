@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from eval_harness.config import Settings
-from eval_harness.metrics.ragas_metrics import AnswerRelevanceMetric
+from eval_harness.metrics.ragas_metrics import AnswerRelevanceMetric, ContextRecallMetric
 from eval_harness.metrics.refusal import RefusalCorrectnessMetric, RefusalVerdict
 from eval_harness.runner.evaluate import mean_scores_by_category
 from eval_harness.schemas import EvalInput
@@ -76,6 +76,21 @@ def test_answer_relevance_skips_questions_that_should_be_declined(
     monkeypatch.setattr(ragas_module, "get_settings", lambda: Settings(openai_api_key="sk-..."))
     with pytest.raises(ValueError, match="should be declined"):
         AnswerRelevanceMetric().score(_unanswerable("The excerpts do not cover this."))
+
+
+def test_context_recall_skips_questions_that_should_be_declined(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Its reference answer for these is "not answerable", so there is nothing to recall, and
+    the verdict on them flips between identical runs. Like answer_relevance, the skip must come
+    before any API client is built."""
+    import eval_harness.metrics.ragas_metrics as ragas_module
+
+    monkeypatch.setattr(ragas_module, "get_settings", lambda: Settings(openai_api_key="sk-..."))
+    unanswerable = _unanswerable("The excerpts do not cover this.")
+    unanswerable.ground_truth_answer = "Not answerable from this documentation set."
+    with pytest.raises(ValueError, match="should be declined"):
+        ContextRecallMetric().score(unanswerable)
 
 
 def test_means_are_taken_per_category_over_the_questions_a_metric_scored() -> None:

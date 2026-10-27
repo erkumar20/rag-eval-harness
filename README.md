@@ -166,9 +166,11 @@ limits and the resulting retry-backoff is *slower* than running sequentially.
 
 Measured, not hidden:
 
-- **The 5% threshold is tighter than metric noise.** Two runs of identical code produced a
-  +9.2% swing in `context_recall`, so a clean PR can fail the gate by chance. Fixing this
-  properly needs per-metric thresholds derived from measured variance.
+- **The 5% threshold was tighter than metric noise.** Two runs of identical code scored
+  `context_recall` ~10% above the baseline. Most of that came from the five out-of-scope
+  questions, whose `context_recall` flips between identical runs (now excluded). The committed
+  baseline predates that fix, and the remaining variance still needs measuring across repeated
+  full runs before per-metric thresholds are set.
 - **`answer_relevance` is a change detector, not an absolute score.** Even on answerable
   questions it rewards answers whose wording lets the question be reconstructed, so correct
   code-only, yes/no and long multi-part answers score low. Read its movement, not its level.

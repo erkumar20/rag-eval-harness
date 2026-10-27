@@ -111,6 +111,13 @@ class ContextRecallMetric(Metric):
         return self._thread_local.metric
 
     def score(self, eval_input: EvalInput) -> MetricResult:
+        if eval_input.expects_refusal:
+            # The reference for these questions is "not answerable from this documentation", and
+            # whether the retrieved text "supports" that is close to a coin flip: re-scoring
+            # IDENTICAL stored inputs five times gave [1,0,1,1,1] and [0,0,0,0,1] on two of the
+            # five, while five answerable controls were identical every time. Those five
+            # questions are where nearly all of this metric's run-to-run swing comes from.
+            raise ValueError("context_recall does not apply to questions that should be declined")
         if not eval_input.ground_truth_answer:
             raise ValueError("context_recall requires EvalInput.ground_truth_answer")
         result = asyncio.run(
