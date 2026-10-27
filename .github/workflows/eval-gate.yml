@@ -127,7 +127,15 @@ jobs:
       # needs to see which metric moved and by how much.
       - name: Publish summary
         if: always() && steps.scope.outputs.run == 'true'
-        run: cat gate-summary.md >> "$GITHUB_STEP_SUMMARY"
+        # The summary is only written once the evaluation reaches the gating step, so a run
+        # that is cancelled or crashes mid-evaluation (rate limit, timeout) has none. Without
+        # this guard `cat` fails and stacks a second, misleading error on top of the real one.
+        run: |
+          if [ -f gate-summary.md ]; then
+            cat gate-summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No gate summary was produced: the evaluation did not reach the gating step." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Comment metric deltas on the PR
         if: always() && github.event_name == 'pull_request' && steps.scope.outputs.run == 'true'
