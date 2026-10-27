@@ -157,7 +157,8 @@ Measured, not hidden:
 - **The 5% threshold is tighter than metric noise.** Two runs of identical code produced a
   +9.2% swing in `context_recall`, so a clean PR can fail the gate by chance. Fixing this
   properly needs per-metric thresholds derived from measured variance.
-- **`answer_relevance` looks unreliable** (see above) and currently depresses the baseline.
+- **`answer_relevance` may be unreliable** (see above). The evidence is one run, so treat it as a
+  hypothesis under investigation; if it is mis-scoring, it is also pulling the baseline down.
 - The hallucination metric requires structured output, so it is opt-in and does not run against
   the free-text demo pipeline.
 
