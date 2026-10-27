@@ -55,6 +55,8 @@ class Result(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     run_id: Mapped[int] = mapped_column(ForeignKey("runs.id"), index=True)
     question_id: Mapped[str] = mapped_column(String(255))
+    # Nullable: runs stored before categories were recorded have none.
+    category: Mapped[str | None] = mapped_column(String(50), nullable=True)
     question: Mapped[str] = mapped_column(Text)
     answer: Mapped[str] = mapped_column(Text)
     contexts: Mapped[list] = mapped_column(JSONB)

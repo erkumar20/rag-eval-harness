@@ -28,6 +28,7 @@ def _result_row(run_id: int, eval_result: EvalResult) -> Result:
     return Result(
         run_id=run_id,
         question_id=eval_result.qa_id,
+        category=eval_result.category,
         question=eval_result.question,
         answer=eval_result.answer,
         contexts=eval_result.contexts,

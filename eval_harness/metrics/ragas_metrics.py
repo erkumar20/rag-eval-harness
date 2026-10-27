@@ -158,6 +158,11 @@ class AnswerRelevanceMetric(Metric):
         return self._thread_local.metric
 
     def score(self, eval_input: EvalInput) -> MetricResult:
+        if eval_input.expects_refusal:
+            # RAGAS reconstructs the question from the answer alone and forces the score to 0
+            # when the answer reads as evasive -- which a correct refusal always does. Scoring
+            # these would punish exactly the behaviour we want; refusal_correctness covers them.
+            raise ValueError("answer_relevance does not apply to questions that should be declined")
         result = asyncio.run(
             self._get_metric().ascore(
                 user_input=eval_input.question,

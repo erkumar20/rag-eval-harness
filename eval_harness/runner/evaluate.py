@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import defaultdict
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from eval_harness.config import get_settings
-from eval_harness.dataset.schema import QAPair
+from eval_harness.dataset.schema import QAPair, QuestionCategory
 from eval_harness.interfaces.pipeline import RAGPipelineInterface
 from eval_harness.judge.base import JudgeLLM
 from eval_harness.judge.schema import Diagnosis
@@ -37,6 +39,7 @@ def _score_question(
     metrics: list[Metric],
     judge: JudgeLLM | None,
     judge_threshold: float,
+    judge_excluded: frozenset[str],
     pipeline_version: str,
     dataset_version: str | None,
 ) -> EvalResult:
@@ -50,6 +53,7 @@ def _score_question(
         contexts=output["contexts"],
         ground_truth_answer=qa.ground_truth_answer,
         ground_truth_contexts=qa.ground_truth_contexts,
+        expects_refusal=qa.category == QuestionCategory.UNANSWERABLE,
     )
 
     metric_results: list[MetricResult] = []
@@ -65,7 +69,11 @@ def _score_question(
             continue
         metric_results.append(result)
 
-        if judge is not None and result.score < judge_threshold:
+        if (
+            judge is not None
+            and result.score < judge_threshold
+            and result.metric_name not in judge_excluded
+        ):
             judge_started = time.monotonic()
             diagnoses.append(
                 judge.judge(
@@ -100,9 +108,29 @@ def _score_question(
         contexts=eval_input.contexts,
         pipeline_version=pipeline_version,
         dataset_version=dataset_version,
+        category=qa.category.value,
         metric_results=metric_results,
         judge_diagnoses=diagnoses,
     )
+
+
+def mean_scores_by_category(
+    items: Iterable[tuple[str | None, dict[str, float]]],
+) -> dict[str, dict[str, float]]:
+    """Mean score per metric within each question category.
+
+    A single overall mean hides which kind of question moves it: answer_relevance looked
+    mediocre overall (0.558) but was really ~0.65 on answerable questions and ~0.14 on the
+    unanswerable ones. Each metric is averaged only over the questions it was scored on.
+    """
+    totals: defaultdict[str, defaultdict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    for category, scores in items:
+        for metric_name, score in scores.items():
+            totals[category or "unknown"][metric_name].append(score)
+    return {
+        category: {name: sum(values) / len(values) for name, values in metrics.items()}
+        for category, metrics in totals.items()
+    }
 
 
 def _mean_scores(results: list[EvalResult]) -> dict[str, float]:
@@ -140,7 +168,9 @@ def run_evaluation(
     5-worker run of the golden set hadn't finished after 24 minutes, versus ~25s/question
     sequentially). Raise this only against API tiers with headroom to match.
     """
-    judge_threshold = get_settings().judge_score_threshold
+    settings = get_settings()
+    judge_threshold = settings.judge_score_threshold
+    judge_excluded = frozenset(settings.judge_excluded_metrics)
     started = time.monotonic()
     logger.info(
         "Scoring %d questions against %s@%s with %d metric(s), judge %s",
@@ -167,7 +197,14 @@ def run_evaluation(
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         scored = pool.map(
             lambda qa: _score_question(
-                qa, pipeline, metrics, judge, judge_threshold, pipeline_version, dataset_version
+                qa,
+                pipeline,
+                metrics,
+                judge,
+                judge_threshold,
+                judge_excluded,
+                pipeline_version,
+                dataset_version,
             ),
             dataset,
         )
