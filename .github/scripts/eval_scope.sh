@@ -24,8 +24,16 @@ emit() {
     echo "eval scope: run=$1 ($2)"
 }
 
-# Anything that can change what the pipeline answers or how it is scored.
-RELEVANT='^(rag_demo/|eval_harness/|baseline\.json$|\.github/workflows/eval-gate\.yml$|\.github/scripts/eval_scope\.sh$)'
+# Anything that can change what the pipeline answers or how it is scored, plus the gate's own
+# workflow and scripts (a change to those should be exercised by a real run, not assumed).
+#
+# baseline.json is deliberately NOT listed. The gate compares against the baseline on the base
+# branch, so a PR that only edits baseline.json cannot change any score: evaluating it would
+# just compare unchanged code to the old baseline, and could fail a legitimate re-baseline on
+# run-to-run noise. Such a PR is instead reported loudly by baseline_changes.py. A PR that
+# changes baseline.json *and* code still matches via the code paths, and is graded against the
+# old baseline.
+RELEVANT='^(rag_demo/|eval_harness/|\.github/workflows/eval-gate\.yml$|\.github/scripts/)'
 
 if [ "${EVENT_NAME:-}" != "pull_request" ]; then
     emit true "manual or non-PR trigger"

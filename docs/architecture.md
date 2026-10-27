@@ -166,10 +166,29 @@ Positive drop means the score fell; an improvement is negative and always passes
 no baseline passes by default, so a pipeline's first run cannot fail its own gate.
 
 **Baselines are committed to the repo** (`baseline.json`), not read from the database, because
-CI gets a fresh empty Postgres on every job — a database-only baseline would always read back as
+CI gets a fresh empty Postgres on every job -- a database-only baseline would always read back as
 "no baseline yet" and the gate would silently pass every time. A green check that can never fail
-is worse than no check. Committing it also means any change to the baseline shows up in the PR
-diff, so a PR that lowers the bar to make itself pass is visible to a reviewer.
+is worse than no check.
+
+**A PR is graded against the baseline on the base branch, never its own copy.** Committing the
+file alone was not enough: a PR could lower `baseline.json` and then pass against its own
+weakened bar. The workflow therefore extracts `baseline.json` from the PR's base commit
+(`git show $BASE_SHA:baseline.json`) and passes that to the gate. If the base branch has no
+baseline, the job fails rather than passing by default.
+
+This also means changing the baseline is a deliberate, separate act:
+
+- A PR that **only** edits `baseline.json` cannot change any score, so it skips the evaluation
+  (running it would compare unchanged code to the old baseline and could fail a legitimate
+  re-baseline on run-to-run noise). Instead the PR gets a comment with a before/after table, with
+  lowered metrics flagged `LOWERED`, so the change cannot go unnoticed.
+- A PR that changes the baseline **and** code is evaluated against the old baseline. It cannot
+  lower the bar and pass in the same change.
+
+On a single-maintainer repo there is no second reviewer, so lowering the baseline is still
+possible by opening that dedicated PR and merging it yourself. What the design guarantees is that
+it takes an explicit, visible, separate step; it does not pretend to prevent a maintainer from
+approving their own change.
 
 ### Known weakness
 
