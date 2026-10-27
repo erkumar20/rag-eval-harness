@@ -16,6 +16,9 @@ class DemoRAGPipeline:
 
     def query(self, question: str) -> dict:
         chunks = self.retriever.retrieve(question, k=self.top_k)
+        # Order is meaningful: contexts[0] is the best match. The harness's hallucination
+        # metric reports citations as positional indices into this list, so reordering or
+        # filtering here would silently change what a cited_chunk_id refers to.
         contexts = [c.text for c in chunks]
         answer = generate_answer(question, contexts)
         return {"answer": answer, "contexts": contexts}
