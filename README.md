@@ -143,6 +143,10 @@ pipeline, metrics and judge, so a test that starts needing a live key fails the 
 `eval-gate.yml` runs the real evaluation, posts the metric-delta table as a PR comment, and
 exits non-zero on regression. It is scoped narrowly because it costs real tokens.
 
+The gate grades a PR against the baseline on the **base branch**, not the PR's own copy, so a PR
+cannot lower the bar for itself. Changing `baseline.json` is its own PR, and the bot flags any
+lowered metric. `main` is protected: both checks must pass before a merge.
+
 ## Cost and rate limits
 
 A full run is ~87k generator tokens. On Groq's free tier (200k tokens/day) that allows roughly
