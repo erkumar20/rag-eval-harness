@@ -3,15 +3,15 @@ name: RAG eval gate
 # Blocks a PR when the demo pipeline's metric scores regress beyond the allowed threshold
 # (BASELINE_DROP_THRESHOLD, default 5%) versus the committed baseline.json.
 #
-# This costs real API spend and ~14 minutes per run, so it is deliberately scoped to PRs that
-# actually touch the pipeline or harness, and can also be triggered by hand.
+# This costs real API spend and ~14 minutes per run, so the expensive steps only run for PRs
+# that touch the pipeline, harness or baseline (decided by .github/scripts/eval_scope.sh).
+#
+# It triggers on EVERY pull request, deliberately: this job is meant to be a required status
+# check, and a required check that never triggers sits pending forever, which would make
+# docs-only PRs unmergeable. When nothing relevant changed, the evaluation steps are skipped
+# and the job still reports success within seconds.
 on:
   pull_request:
-    paths:
-      - 'rag_demo/**'
-      - 'eval_harness/**'
-      - 'baseline.json'
-      - '.github/workflows/eval-gate.yml'
   workflow_dispatch:
 
 permissions:
@@ -56,29 +56,53 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so the scope check can diff against the PR's base commit.
+          fetch-depth: 0
+
+      - name: Decide whether the evaluation applies
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: bash .github/scripts/eval_scope.sh
+
+      - name: Note that the evaluation was skipped
+        if: steps.scope.outputs.run != 'true'
+        run: |
+          {
+            echo "## RAG eval gate"
+            echo
+            echo "Skipped: ${{ steps.scope.outputs.reason }}. No regression is possible from this change, so no evaluation was run."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/setup-python@v5
+        if: steps.scope.outputs.run == 'true'
         with:
           python-version: '3.13'
           cache: pip
 
       - name: Install package
+        if: steps.scope.outputs.run == 'true'
         run: pip install -e ".[dev]"
 
       # The demo pipeline embeds locally with bge-small-en-v1.5 (~130MB). Caching it keeps
       # every run from re-downloading it from the HF hub.
       - name: Cache embedding model
+        if: steps.scope.outputs.run == 'true'
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
           key: hf-bge-small-en-v1.5
 
       - name: Apply database migrations
+        if: steps.scope.outputs.run == 'true'
         run: alembic upgrade head
 
       # Qdrant runs in embedded local mode (a directory, no server), so the collection has to
       # be built from the committed corpus on each fresh runner.
       - name: Ingest corpus into Qdrant
+        if: steps.scope.outputs.run == 'true'
         run: python -m rag_demo.ingest
 
       # --no-use-judge: the gate's verdict is computed purely from metric scores, so the
@@ -89,6 +113,7 @@ jobs:
       # before this was cut. Judge diagnostics stay available for local/manual runs.
       - name: Run evaluation and gate against baseline
         id: gate
+        if: steps.scope.outputs.run == 'true'
         run: |
           evalharness run \
             --pipeline demo \
@@ -101,11 +126,11 @@ jobs:
       # Runs even when the gate step failed -- a blocked PR is exactly when the reader most
       # needs to see which metric moved and by how much.
       - name: Publish summary
-        if: always()
+        if: always() && steps.scope.outputs.run == 'true'
         run: cat gate-summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comment metric deltas on the PR
-        if: always() && github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request' && steps.scope.outputs.run == 'true'
         uses: actions/github-script@v7
         with:
           script: |
