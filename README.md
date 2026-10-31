@@ -39,16 +39,22 @@ golden dataset ──► pipeline ──► metrics ──► judge (on failures
 
 ## Results on the reference pipeline
 
-Baseline from a real run over all 35 questions:
+Current baseline, from a CI run over all 35 questions (`baseline.json`):
 
-| Metric | Score |
-|---|---|
-| faithfulness | 0.929 |
-| context_recall | 0.829 |
-| answer_relevance | 0.558 |
+| Metric | Score | Averaged over |
+|---|---|---|
+| faithfulness | 0.932 | all 35 questions |
+| context_recall | 0.989 | the 30 answerable questions |
+| answer_relevance | 0.637 | the 30 answerable questions |
+| refusal_correctness | 1.000 | the 5 out-of-scope questions (all declined) |
 
-The gate was then validated end to end on a real pull request: a deliberate retrieval
-regression was introduced, CI **blocked the merge**, and the same PR went green once reverted.
+The first baseline was 0.929 / 0.829 / 0.558 with every question averaged together. It was
+replaced after finding that two metrics mis-scored the out-of-scope questions (see
+[What the judge found](#what-the-judge-found)).
+
+The gate was validated end to end on a real pull request: a deliberate retrieval regression was
+introduced, CI **blocked the merge**, and the same PR went green once reverted. The comment below
+is from that run, against the original baseline:
 
 <!-- Gate comment posted automatically on the PR -->
 ```
