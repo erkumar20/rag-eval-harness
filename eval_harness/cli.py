@@ -17,13 +17,14 @@ from eval_harness.metrics.ragas_metrics import (
     ContextRecallMetric,
     FaithfulnessMetric,
 )
+from eval_harness.metrics.refusal import RefusalCorrectnessMetric
 from eval_harness.runner.baseline import (
     GateResult,
     check_baseline_gate,
     set_baseline_from_run,
     write_baseline_file,
 )
-from eval_harness.runner.evaluate import RunSummary, run_evaluation
+from eval_harness.runner.evaluate import RunSummary, mean_scores_by_category, run_evaluation
 from eval_harness.storage.db import session_scope
 from eval_harness.storage.models import PipelineVersion, Result, Run
 
@@ -36,7 +37,16 @@ def _default_metrics() -> list[Metric]:
     # answer/contexts. HallucinationMetric (Phase 7) is opt-in per pipeline -- it needs
     # EvalInput.structured_answer, which the demo pipeline never populates -- so it isn't
     # included here; a structured-output pipeline's own run script adds it explicitly.
-    return [FaithfulnessMetric(), ContextRecallMetric(), AnswerRelevanceMetric()]
+    #
+    # RefusalCorrectnessMetric only scores the questions the pipeline should decline, and
+    # AnswerRelevanceMetric skips exactly those (a correct refusal reads as "evasive" to it and
+    # is forced to 0). Between them every question is scored by the right measure.
+    return [
+        FaithfulnessMetric(),
+        ContextRecallMetric(),
+        AnswerRelevanceMetric(),
+        RefusalCorrectnessMetric(),
+    ]
 
 
 def _load_pipeline(name: str):
@@ -124,6 +134,29 @@ def _print_scores(summary: RunSummary) -> None:
     table.add_column("Mean Score", justify="right")
     for metric_name, value in summary.mean_scores.items():
         table.add_row(metric_name, f"{value:.3f}")
+    console.print(table)
+    _print_by_category(
+        mean_scores_by_category(
+            (r.category, {m.metric_name: m.score for m in r.metric_results})
+            for r in summary.results
+        )
+    )
+
+
+def _print_by_category(by_category: dict[str, dict[str, float]]) -> None:
+    """Per-category means. The overall mean hides which kind of question moves it."""
+    if not by_category or set(by_category) == {"unknown"}:
+        return
+    metric_names = sorted({m for scores in by_category.values() for m in scores})
+    table = Table(title="By category (a metric is averaged only over questions it applies to)")
+    table.add_column("Category")
+    for name in metric_names:
+        table.add_column(name, justify="right")
+    for category in sorted(by_category):
+        table.add_row(
+            category, *(f"{by_category[category][n]:.3f}" if n in by_category[category] else "-"
+                        for n in metric_names)
+        )
     console.print(table)
 
 
@@ -254,6 +287,9 @@ def report(run_id: int) -> None:
                 )
             table.add_row(result.question_id, scores_str, diagnosis_str)
         console.print(table)
+        _print_by_category(
+            mean_scores_by_category((r.category, r.metric_scores) for r in results)
+        )
 
 
 def main() -> None:

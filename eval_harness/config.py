@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     # (wired in Phase 9's runner), which is what keeps the cost of using the full model down.
     judge_model: str = "gpt-4o"
     judge_score_threshold: float = 0.7
+    # Metrics whose low scores are NOT sent to the judge. answer_relevance reconstructs the
+    # question from the answer alone, so it scores correct code-only / yes-no / long-question
+    # answers low; on the first full run GPT-4o judged 23 of its 24 low scores fine, i.e. 24 of
+    # 25 judge calls were spent contradicting it. It still gates (it catches real regressions).
+    judge_excluded_metrics: tuple[str, ...] = ("answer_relevance",)
 
 
 @lru_cache

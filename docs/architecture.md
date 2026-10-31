@@ -96,6 +96,28 @@ Two non-obvious details, both the result of debugging rather than design:
   `asyncio.run(...)`, a shared async client ends up driven from several different event loops,
   whose internal locks and pools are loop-bound. Nothing raises — it just degrades badly.
 
+**Questions the corpus cannot answer are scored differently.** A correct refusal is the right
+behaviour on an out-of-scope question, but RAGAS `answer_relevance` guesses the question back from
+the answer alone and forces the score to 0 when the answer reads as evasive. So:
+
+- `answer_relevance` raises `ValueError` ("not applicable") for `unanswerable` questions, and the
+  runner skips that metric for them. Its mean is over answerable questions only.
+- `refusal_correctness` (`metrics/refusal.py`) scores only those questions: 1.0 if the answer
+  declines *without* supplying an outside-knowledge answer, 0.0 if it answers anyway. Its mean is
+  the fraction of out-of-scope questions correctly declined, which is the hallucination check for
+  out-of-scope questions. It uses a small LLM classifier (a string match on "sorry" would be
+  brittle); the classifier is injectable so tests need no API key.
+- `context_recall` skips them too. Its reference for these questions is "not answerable from this
+  documentation", and whether retrieved text "supports" that is close to a coin flip: re-scoring
+  *identical* stored inputs five times gave `[1,0,1,1,1]` and `[0,0,0,0,1]` on two of the five
+  out-of-scope questions, while five answerable controls were identical every time.
+- Reports show per-category means, because one overall mean hides which kind of question moved.
+
+Re-scoring the first full run this way: `answer_relevance` 0.558 over all 35 becomes 0.628 over
+the 30 answerable questions, and `refusal_correctness` is 1.000 (all 5 out-of-scope questions
+declined). `answer_relevance` is also deterministic given the answer (its three generated
+questions are identical), so its run-to-run movement comes only from answer changes.
+
 **Custom hallucination metric** (`metrics/hallucination.py`): operates on *structured* answers,
 checking each field independently against the specific contexts it cites. Two failure modes per
 field — a fabricated citation (a `cited_chunk_id` that was never retrieved) and an ungrounded
@@ -125,11 +147,13 @@ logic.
 Two deliberate choices:
 
 - **Cost control:** the judge only runs on metrics scoring below `judge_score_threshold`
-  (default 0.7). Passing answers are never sent.
+  (default 0.7). Passing answers are never sent. `answer_relevance` is excluded
+  (`judge_excluded_metrics`): its low scores come from how it works, not from bad answers, and
+  24 of the 25 judge calls on the first run were spent contradicting it.
 - **It may disagree.** The prompt explicitly tells the judge that if a low score looks wrong on
   inspection, it should say so. This is what makes it diagnostic rather than a rubber stamp —
-  on the first full run it returned `pass` on 23 of 24 low `answer_relevance` scores, which is
-  how that metric's unreliability was discovered.
+  on the first full run it returned `pass` on 23 of 24 low `answer_relevance` scores, which
+  prompted the investigation that found why (above).
 
 The gate's verdict never consults judge output; the judge explains, it does not decide. That
 separation is why CI can run with `--no-use-judge` and still gate correctly.
@@ -192,11 +216,17 @@ approving their own change.
 
 ### Known weakness
 
-The threshold is currently a single 5% figure for all metrics, and that is too tight for the
-noise. Two runs of functionally identical code produced a +9.2% swing in `context_recall`, so a
-clean PR can fail by chance. The fix is per-metric thresholds derived from measured variance
-across several runs of unchanged code; it is unresolved because measuring it is constrained by
-the token budget below.
+The threshold is a single 5% figure for all metrics. Two CI runs of functionally identical code
+scored `context_recall` about 10% above the baseline (0.905 and 0.914 vs 0.829), which would fail
+a gate at 5% if it were a drop.
+
+Much of that swing has now been traced: the five out-of-scope questions are 1/35 of the mean each
+(0.029), their `context_recall` flips between identical runs, and three flips is 0.086 — the size
+of the gap. Those questions no longer contribute to `context_recall` (see Metrics), which should
+remove most of the noise. Two things remain open: the committed baseline predates that change and
+must be regenerated, and the remaining variance on answerable questions has not yet been measured
+across repeated full runs, so per-metric thresholds are still to be derived from data. Measuring
+it is constrained by the token budget below.
 
 ## Operational constraints
 

@@ -14,6 +14,7 @@ from eval_harness.dataset.schema import QAPair, QuestionCategory
 from eval_harness.judge.base import JudgeLLM
 from eval_harness.judge.schema import Diagnosis
 from eval_harness.metrics.base import Metric
+from eval_harness.metrics.refusal import RefusalCorrectnessMetric, RefusalVerdict
 from eval_harness.runner.baseline import (
     check_baseline_gate,
     set_baseline_from_run,
@@ -201,6 +202,88 @@ def test_completed_run_is_stamped_finished(pipeline_name: str) -> None:
         run = session.get(Run, summary.run_id)
         assert run is not None
         assert run.finished_at is not None
+
+
+class AnswerRelevanceStandIn(Metric):
+    """Behaves like the real answer_relevance where it matters here: named identically (so the
+    judge exclusion applies), scores low, and refuses to score questions that should be declined."""
+
+    name = "answer_relevance"
+
+    def score(self, eval_input: EvalInput) -> MetricResult:
+        if eval_input.expects_refusal:
+            raise ValueError("answer_relevance does not apply to questions that should be declined")
+        return MetricResult(metric_name=self.name, score=0.1)
+
+
+def _mixed_dataset() -> list[QAPair]:
+    return [
+        QAPair(id="m001", question="a good question", ground_truth_answer="x",
+               category=QuestionCategory.DIRECT),
+        QAPair(id="m002", question="an out of scope question", ground_truth_answer="not covered",
+               category=QuestionCategory.UNANSWERABLE),
+    ]
+
+
+class RefusingPipeline:
+    def query(self, question: str) -> dict:
+        if "out of scope" in question:
+            return {"answer": "Sorry, the excerpts do not cover this.", "contexts": ["unrelated"]}
+        return {"answer": "a real answer", "contexts": ["relevant context"]}
+
+
+def test_unanswerable_questions_get_the_refusal_check_and_skip_answer_relevance(
+    pipeline_name: str,
+) -> None:
+    judge = RecordingFakeJudge()
+    summary = run_evaluation(
+        RefusingPipeline(),
+        _mixed_dataset(),
+        [
+            AnswerRelevanceStandIn(),
+            RefusalCorrectnessMetric(
+                classifier=lambda q, a: RefusalVerdict(declines="Sorry" in a, reason="stub")
+            ),
+        ],
+        judge=judge,
+        pipeline_name=pipeline_name,
+        pipeline_version="v1",
+        dataset_version="test-v1",
+    )
+
+    # Each question is scored by exactly the metrics that apply to it.
+    by_id = {r.qa_id: {m.metric_name: m.score for m in r.metric_results} for r in summary.results}
+    assert by_id["m001"] == {"answer_relevance": 0.1}
+    assert by_id["m002"] == {"refusal_correctness": 1.0}
+
+    # Means are taken only over the questions each metric was scored on.
+    assert summary.mean_scores == {"answer_relevance": 0.1, "refusal_correctness": 1.0}
+
+    # The category is stored with each result, so per-category reporting works from the database.
+    with session_scope() as session:
+        rows = session.scalars(select(Result).where(Result.run_id == summary.run_id)).all()
+        assert {r.question_id: r.category for r in rows} == {
+            "m001": "direct",
+            "m002": "unanswerable",
+        }
+
+    # answer_relevance scored 0.1, far below the judge threshold, but it is on the exclusion
+    # list: it systematically contradicts the judge, so it must not trigger a judge call.
+    assert judge.calls == []
+
+
+def test_a_low_score_on_a_non_excluded_metric_still_reaches_the_judge(pipeline_name: str) -> None:
+    judge = RecordingFakeJudge()
+    run_evaluation(
+        FakePipeline(),
+        _dataset(),
+        [ScoreByAnswerMetric()],
+        judge=judge,
+        pipeline_name=pipeline_name,
+        pipeline_version="v1",
+        dataset_version="test-v1",
+    )
+    assert judge.calls == [("fake_score", 0.2)]
 
 
 def test_file_baseline_gates_the_same_way_the_database_does(

@@ -75,6 +75,14 @@ perfectly relevant. By contrast `context_recall`'s failures were mostly judged g
 That asymmetry is the argument for having a judge layer at all: a single aggregate score tells
 you something moved, not whether it was the pipeline or the metric that was wrong.
 
+It also led to the cause. RAGAS's `answer_relevance` never sees the question: it guesses the
+question back from the answer and compares the guess to the real one. So a correct code-only
+answer scores 0.22 ("What does the provided Python code do?" vs the real question), and a correct
+**refusal** is forced to 0 because it reads as evasive. Questions the corpus cannot answer are
+therefore scored by a dedicated `refusal_correctness` check instead, and `answer_relevance` is
+averaged over answerable questions only. It is still kept as a regression signal: it fell 54%
+when retrieval was deliberately broken.
+
 ## Design
 
 **Pipelines plug in structurally, not by inheritance.** The only contract is:
@@ -158,11 +166,16 @@ limits and the resulting retry-backoff is *slower* than running sequentially.
 
 Measured, not hidden:
 
-- **The 5% threshold is tighter than metric noise.** Two runs of identical code produced a
-  +9.2% swing in `context_recall`, so a clean PR can fail the gate by chance. Fixing this
-  properly needs per-metric thresholds derived from measured variance.
-- **`answer_relevance` may be unreliable** (see above). The evidence is one run, so treat it as a
-  hypothesis under investigation; if it is mis-scoring, it is also pulling the baseline down.
+- **The 5% threshold was tighter than metric noise.** Two runs of identical code scored
+  `context_recall` ~10% above the baseline. Most of that came from the five out-of-scope
+  questions, whose `context_recall` flips between identical runs (now excluded). The committed
+  baseline predates that fix, and the remaining variance still needs measuring across repeated
+  full runs before per-metric thresholds are set.
+- **`answer_relevance` is a change detector, not an absolute score.** Even on answerable
+  questions it rewards answers whose wording lets the question be reconstructed, so correct
+  code-only, yes/no and long multi-part answers score low. Read its movement, not its level.
+- **The committed baseline predates the refusal check**, so `refusal_correctness` is reported
+  but not yet gated until the baseline is regenerated.
 - The hallucination metric requires structured output, so it is opt-in and does not run against
   the free-text demo pipeline.
 

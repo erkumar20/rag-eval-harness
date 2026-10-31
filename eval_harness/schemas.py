@@ -35,6 +35,10 @@ class EvalInput(BaseModel):
     contexts: list[str]
     ground_truth_answer: str | None = None
     ground_truth_contexts: list[str] = Field(default_factory=list)
+    # True for questions the corpus cannot answer, where declining IS the correct behaviour.
+    # Metrics that would punish a correct refusal (answer_relevance) skip these questions, and
+    # refusal_correctness scores only these.
+    expects_refusal: bool = False
     # Only populated for pipelines that produce structured/field-level output -- required by
     # the custom hallucination metric (Phase 7), unused by the RAGAS metrics (Phase 5).
     structured_answer: StructuredAnswer | None = None
@@ -55,6 +59,7 @@ class EvalResult(BaseModel):
     contexts: list[str]
     pipeline_version: str
     dataset_version: str | None = None
+    category: str | None = None
     metric_results: list[MetricResult] = Field(default_factory=list)
     judge_diagnoses: list[Diagnosis] = Field(default_factory=list)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
