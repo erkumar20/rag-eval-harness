@@ -115,8 +115,9 @@ the answer alone and forces the score to 0 when the answer reads as evasive. So:
 
 Re-scoring the first full run this way: `answer_relevance` 0.558 over all 35 becomes 0.628 over
 the 30 answerable questions, and `refusal_correctness` is 1.000 (all 5 out-of-scope questions
-declined). `answer_relevance` is also deterministic given the answer (its three generated
-questions are identical), so its run-to-run movement comes only from answer changes.
+declined). `answer_relevance` is close to deterministic given the answer: re-scoring the same 30
+stored answers three times moved its mean by only 0.003 (individual questions occasionally move
+by up to ~0.1), so its run-to-run movement comes almost entirely from answer changes.
 
 **Custom hallucination metric** (`metrics/hallucination.py`): operates on *structured* answers,
 checking each field independently against the specific contexts it cites. Two failure modes per
@@ -220,13 +221,34 @@ The threshold is a single 5% figure for all metrics. Two CI runs of functionally
 scored `context_recall` about 10% above the baseline (0.905 and 0.914 vs 0.829), which would fail
 a gate at 5% if it were a drop.
 
-Much of that swing has now been traced: the five out-of-scope questions are 1/35 of the mean each
-(0.029), their `context_recall` flips between identical runs, and three flips is 0.086 — the size
-of the gap. Those questions no longer contribute to `context_recall` (see Metrics), which should
-remove most of the noise. Two things remain open: the committed baseline predates that change and
-must be regenerated, and the remaining variance on answerable questions has not yet been measured
-across repeated full runs, so per-metric thresholds are still to be derived from data. Measuring
-it is constrained by the token budget below.
+Most of that swing was traced to the five out-of-scope questions: each is 1/35 of the mean
+(0.029), their `context_recall` flips between identical runs, and three flips is 0.086, the size of
+the gap. Those questions no longer count toward `context_recall`, and the baseline was regenerated
+afterwards.
+
+The remaining metric noise was then measured by re-scoring one run's stored answers three times.
+No generator is involved, so this isolates the metrics themselves:
+
+| Metric | Mean per pass | Spread | Questions that changed |
+|---|---|---|---|
+| `context_recall` | 0.967, 0.967, 0.967 | 0.000 | none |
+| `answer_relevance` | 0.644, 0.644, 0.646 | 0.003 | a few, by up to ~0.1 |
+| `refusal_correctness` | 1.000 x3 | 0.000 | none |
+| `faithfulness` | 0.916, 0.913, 0.895 | 0.021 | 9 of 35 |
+
+Nearly all of `faithfulness`'s noise comes from the five refusal answers: its mean moved by 0.004
+across the 30 answerable questions but by 0.133 across those five. One such answer flipping from
+1.0 to 0.0 moves the overall mean by 0.029, which is 3.1% of the baseline against a 5% threshold.
+This is the same defect as before (a metric with no well-defined value for a correct refusal) and
+has not been addressed yet.
+
+Two further things are open. CI scored `context_recall` 0.989 where a local run of the same code
+scored 0.967 because one question (q005, a known retrieval gap) scores 0 locally on every
+re-score; since that metric depends only on the retrieved chunks and the reference, CI must have
+retrieved different chunks, which points to an environment effect on retrieval. And variance
+across repeated *full* runs (generator plus retrieval) has not been measured, so per-metric
+thresholds are still to be derived from data. Measuring it is constrained by the token budget
+below.
 
 ## Operational constraints
 
