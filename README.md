@@ -172,11 +172,12 @@ limits and the resulting retry-backoff is *slower* than running sequentially.
 
 Measured, not hidden:
 
-- **The 5% threshold was tighter than metric noise.** Two runs of identical code scored
-  `context_recall` ~10% above the baseline. Most of that came from the five out-of-scope
-  questions, whose `context_recall` flips between identical runs (now excluded). The committed
-  baseline predates that fix, and the remaining variance still needs measuring across repeated
-  full runs before per-metric thresholds are set.
+- **The 5% threshold was tighter than metric noise, and part of that remains.** Two runs of
+  identical code scored `context_recall` ~10% above the original baseline, mostly from the five
+  out-of-scope questions (now excluded, and the baseline regenerated). Re-scoring identical
+  answers shows `context_recall`, `answer_relevance` and `refusal_correctness` are now stable, but
+  `faithfulness` still swings by about 0.02 overall because of its five refusal answers. Variance
+  across repeated full runs is still being measured before per-metric thresholds are set.
 - **`answer_relevance` is a change detector, not an absolute score.** Even on answerable
   questions it rewards answers whose wording lets the question be reconstructed, so correct
   code-only, yes/no and long multi-part answers score low. Read its movement, not its level.
